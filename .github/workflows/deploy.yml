@@ -571,7 +571,9 @@ jobs:
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-redirect-http-to-https"=true \
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-disable-lets-encrypt-dns-records"=true \
             --set controller.service.annotations."external-dns\.alpha\.kubernetes\.io/hostname"=${FULL_DOMAIN_NAME} \
-            --set controller.service.annotations."external-dns\.alpha\.kubernetes\.io/ttl"="30" \
+            --set controller.service.annotations."external-dns\.alpha\.kubernetes\.io/ttl"=30 \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-size-unit"=6 \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-size-unit-type"=global \
             --set controller.service.ports.http=80 \
             --set controller.service.ports.https=443 \
             --set controller.service.targetPorts.http=80 \

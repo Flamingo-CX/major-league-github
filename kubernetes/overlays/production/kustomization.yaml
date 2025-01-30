@@ -1,0 +1,79 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: major-league-github
+
+resources:
+  - ../../base
+
+configMapGenerator:
+  - name: app-config-prod
+    literals:
+      - DOMAIN_NAME=major-league-github
+      - DOMAIN_SUFFIX=flamingo.cx
+      - WEB_SERVICE_NAME=backend
+      - WEB_SERVICE_PORT=8080
+      - CACHE_UPDATER_NAME=cache-updater
+      - CACHE_UPDATER_PORT=8081
+      - ENVIRONMENT=production
+      - JAVA_MAX_HEAP=512m
+      - JAVA_MIN_HEAP=256m
+      - NODE_ENV=production
+      - API_TIMEOUT=30000
+      - BACKEND_URL=http://backend-service:8080
+  - name: backend-config-prod
+    literals:
+      - SERVER_PORT=8080
+      - SPRING_PROFILES_ACTIVE=backend
+  - name: cache-updater-config-prod
+    literals:
+      - SERVER_PORT=8081
+      - SPRING_PROFILES_ACTIVE=cache-updater
+  - name: frontend-config-prod
+    literals:
+      - NODE_ENV=production
+      - API_TIMEOUT=30000
+
+secretGenerator:
+  - name: app-secrets-prod
+    literals:
+      - github.tokens=your-github-tokens
+      - linkedin.client.id=your-linkedin-client-id
+      - linkedin.client.secret=your-linkedin-client-secret
+
+patches:
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1hostname
+        value: major-league-github.flamingo.cx
+      - op: replace
+        path: /metadata/annotations/nginx.ingress.kubernetes.io~1cors-allow-origin
+        value: https://major-league-github.flamingo.cx
+      - op: replace
+        path: /spec/rules/0/host
+        value: major-league-github.flamingo.cx
+      - op: replace
+        path: /spec/rules/0/http/paths/0/backend/service/name
+        value: backend-service
+  - target:
+      kind: Deployment
+      name: backend
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+      - op: replace
+        path: /spec/replicas
+        value: 2

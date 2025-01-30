@@ -548,9 +548,22 @@ jobs:
             --set domainFilters[0]="${{ env.DOMAIN_SUFFIX }}" \
             --set txtOwnerId="${{ env.DOMAIN_NAME }}" \
             --set policy=sync \
+            --set logLevel=debug \
+            --set interval=30s \
+            --set sources[0]=service \
+            --set sources[1]=ingress \
+            --set sources[2]=istio-gateway \
+            --set rbac.create=true \
+            --set serviceAccount.create=true \
+            --set serviceAccount.name=external-dns \
             --wait \
             --timeout 5m; then
             echo "❌ ExternalDNS installation failed"
+            echo "🦩 Checking ExternalDNS pod logs..."
+            EXTERNAL_DNS_POD=$(kubectl get pods -n external-dns -l "app.kubernetes.io/name=external-dns" -o jsonpath="{.items[0].metadata.name}")
+            kubectl logs -n external-dns $EXTERNAL_DNS_POD
+            echo "🦩 Describing ExternalDNS pod..."
+            kubectl describe pod -n external-dns $EXTERNAL_DNS_POD
             kubectl get events -n external-dns --sort-by='.lastTimestamp'
             exit 1
           fi

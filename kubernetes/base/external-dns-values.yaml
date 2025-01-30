@@ -1,0 +1,26 @@
+provider: digitalocean
+env:
+  - name: DO_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: digitalocean-dns
+        key: token
+digitalocean:
+  apiTokenSecretRef:
+    name: digitalocean-dns
+    key: token
+    namespace: external-dns
+domainFilters:
+  - flamingo.cx
+txtOwnerId: major-league-github
+policy: sync
+logLevel: debug
+interval: "30s"
+sources:
+  - service
+  - ingress
+rbac:
+  create: true
+serviceAccount:
+  create: true
+  name: external-dns

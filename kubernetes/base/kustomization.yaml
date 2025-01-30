@@ -1,0 +1,124 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ingress.yaml
+  - backend-service.yaml
+  - frontend.yaml
+  - redis.yaml
+
+configMapGenerator:
+  - name: app-config-generated
+    literals:
+      - DOMAIN_NAME=major-league-github
+      - DOMAIN_SUFFIX=flamingo.cx
+      - WEB_SERVICE_NAME=backend
+      - WEB_SERVICE_PORT=8080
+      - CACHE_UPDATER_NAME=cache-updater
+      - CACHE_UPDATER_PORT=8081
+      - ENVIRONMENT=production
+      - JAVA_MAX_HEAP=512m
+      - JAVA_MIN_HEAP=256m
+      - NODE_ENV=production
+      - API_TIMEOUT=30000
+      - BACKEND_URL=http://backend-service:8080
+      - SERVICE_NAME=backend
+      - BACKEND_REPLICAS=2
+      - REGISTRY=registry.digitalocean.com
+      - REGISTRY_NAME=major-league-github
+      - VERSION=latest
+      - SERVER_PORT=8080
+      - BACKEND_REQUEST_MEMORY=512Mi
+      - BACKEND_REQUEST_CPU=250m
+      - BACKEND_LIMIT_MEMORY=1Gi
+      - BACKEND_LIMIT_CPU=500m
+  - name: backend-config-generated
+    literals:
+      - SERVER_PORT=8080
+      - SPRING_PROFILES_ACTIVE=backend
+  - name: cache-updater-config-generated
+    literals:
+      - SERVER_PORT=8081
+      - SPRING_PROFILES_ACTIVE=cache-updater
+  - name: frontend-config-generated
+    literals:
+      - NODE_ENV=production
+      - API_TIMEOUT=30000
+
+secretGenerator:
+  - name: app-secrets-generated
+    literals:
+      - github.tokens=your-github-tokens
+      - linkedin.client.id=your-linkedin-client-id
+      - linkedin.client.secret=your-linkedin-client-secret
+
+patches:
+  - target:
+      kind: Ingress
+      name: app-ingress
+    patch: |-
+      - op: replace
+        path: /metadata/annotations/external-dns.alpha.kubernetes.io~1hostname
+        value: major-league-github.flamingo.cx
+      - op: replace
+        path: /metadata/annotations/nginx.ingress.kubernetes.io~1cors-allow-origin
+        value: https://major-league-github.flamingo.cx
+      - op: replace
+        path: /spec/rules/0/host
+        value: major-league-github.flamingo.cx
+      - op: replace
+        path: /spec/rules/0/http/paths/0/backend/service/name
+        value: backend-service
+  - target:
+      kind: Deployment
+      name: ${SERVICE_NAME}
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: backend
+      - op: replace
+        path: /metadata/labels/app
+        value: backend
+      - op: replace
+        path: /spec/selector/matchLabels/app
+        value: backend
+      - op: replace
+        path: /spec/template/metadata/labels/app
+        value: backend
+      - op: replace
+        path: /spec/template/spec/containers/0/name
+        value: backend
+      - op: replace
+        path: /spec/replicas
+        value: 2
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: 512Mi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: 250m
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/memory
+        value: 1Gi
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/limits/cpu
+        value: 500m
+  - target:
+      kind: Service
+      name: ${SERVICE_NAME}-service
+    patch: |-
+      - op: replace
+        path: /metadata/name
+        value: backend-service
+      - op: replace
+        path: /metadata/labels/app
+        value: backend
+      - op: replace
+        path: /spec/selector/app
+        value: backend
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8080
+      - op: replace
+        path: /spec/ports/0/targetPort
+        value: 8080 

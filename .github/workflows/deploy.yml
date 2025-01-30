@@ -528,103 +528,38 @@ jobs:
             echo "✅ Using existing verified certificate with ID: $EXISTING_CERT_ID"
           fi
           
-          echo "🦩 Installing NGINX Ingress Controller..."
-          
-          # Function to sanitize name for load balancer
-          sanitize_name() {
-            echo "$1" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9-]/-/g' | sed 's/--*/-/g' | sed 's/^-//;s/-$//'
-          }
-          
-          # Sanitize the load balancer name
-          LB_NAME=$(sanitize_name "${{ env.DOMAIN_NAME }}-lb")
-          echo "🦩 Using sanitized load balancer name: ${LB_NAME}"
-          
-          # Function to check load balancer status
-          check_lb_status() {
-            local lb_id=$1
-            local status=$(doctl compute load-balancer get $lb_id --format Status --no-header)
-            echo $status
-          }
-          
-          # Function to wait for load balancer to be ready
-          wait_for_lb() {
-            local lb_id=$1
-            local timeout=300  # 5 minutes timeout
-            local interval=10  # Check every 10 seconds
-            local elapsed=0
-            
-            echo "🦩 Waiting for load balancer to be ready..."
-            while [ $elapsed -lt $timeout ]; do
-              local status=$(check_lb_status $lb_id)
-              
-              if [[ "$status" == "active" ]]; then
-                echo "✅ Load balancer is ready"
-                return 0
-              elif [[ "$status" == "errored" ]]; then
-                echo "❌ Load balancer is in error state"
-                return 1
-              fi
-              
-              echo "🦩 Load balancer status: $status (waited ${elapsed}s)"
-              sleep $interval
-              elapsed=$((elapsed + interval))
-            done
-            
-            echo "❌ Timeout waiting for load balancer"
-            return 1
-          }
-          
-          # Function to cleanup NGINX installation
-          cleanup_nginx() {
-            echo "🦩 Cleaning up NGINX installation..."
-            
-            echo "🦩 Removing NGINX installation..."
-            if ! helm uninstall ingress-nginx -n ingress-nginx --wait --timeout 5m 2>/dev/null; then
-              echo "⚠️ No existing NGINX installation found or uninstall failed"
-            fi
-            
-            # Wait for all ingress-nginx pods to be removed
-            echo "🦩 Waiting for NGINX pods cleanup..."
-            local timeout=60
-            local counter=0
-            while kubectl get pods -n ingress-nginx 2>/dev/null | grep -q "ingress-nginx"; do
-              counter=$((counter + 1))
-              if [ $counter -gt $timeout ]; then
-                echo "❌ Error: Timeout waiting for NGINX pods cleanup"
-                return 1
-              fi
-              echo "🦩 Waiting for NGINX pods cleanup... ($counter/$timeout)"
-              sleep 2
-            done
-            
-            return 0
-          }
-          
-          # Install NGINX Ingress Controller
-          echo "🦩 Installing NGINX Ingress Controller..."
-          
-          # Get existing load balancer ID before cleanup
-          lb_id=$(doctl compute load-balancer list --format ID,Name --no-header | grep "${LB_NAME}" | awk '{print $1}')
-          if [ ! -z "$lb_id" ]; then
-            echo "🦩 Found existing load balancer to reuse (ID: ${lb_id})"
-          fi
-          
-          # Cleanup existing installation
-          if ! cleanup_nginx; then
-            echo "❌ Failed to cleanup NGINX installation"
-            exit 1
-          fi
-          
           echo "🦩 Installing NGINX Ingress with ${lb_id:+"existing"}${lb_id:-"new"} load balancer"
           
           FULL_DOMAIN_NAME="${{ env.DOMAIN_NAME }}.${{ env.DOMAIN_SUFFIX }}"
+
+          echo "🦩 Installing ExternalDNS..."
+          if ! helm repo add external-dns https://kubernetes-sigs.github.io/external-dns/; then
+            echo "❌ Failed to add ExternalDNS helm repo"
+            exit 1
+          fi
+          
+          helm repo update
+
+          if ! helm install external-dns external-dns/external-dns \
+            --namespace external-dns \
+            --create-namespace \
+            --set provider=digitalocean \
+            --set digitalocean.apiToken=${{ env.DIGITALOCEAN_ACCESS_TOKEN }} \
+            --set domainFilters[0]="${{ env.DOMAIN_SUFFIX }}" \
+            --set txtOwnerId="${{ env.DOMAIN_NAME }}" \
+            --set policy=sync \
+            --wait \
+            --timeout 5m; then
+            echo "❌ ExternalDNS installation failed"
+            kubectl get events -n external-dns --sort-by='.lastTimestamp'
+            exit 1
+          fi
 
           echo "🦩 Installing NGINX Ingress with existing load balancer configuration"
 
           if ! helm install ingress-nginx ingress-nginx/ingress-nginx \
             --namespace ingress-nginx \
             --create-namespace \
-            --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-size-unit-type"=global \
             --set controller.service.annotations."kubernetes\.digitalocean\.com/load-balancer-id"=${lb_id:-""} \
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-hostname"=${FULL_DOMAIN_NAME} \
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-name"=${LB_NAME} \
@@ -634,6 +569,9 @@ jobs:
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-protocol"=http \
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-protocol"=https \
             --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-redirect-http-to-https"=true \
+            --set controller.service.annotations."service\.beta\.kubernetes\.io/do-loadbalancer-disable-lets-encrypt-dns-records"=true \
+            --set controller.service.annotations."external-dns\.alpha\.kubernetes\.io/hostname"=${FULL_DOMAIN_NAME} \
+            --set controller.service.annotations."external-dns\.alpha\.kubernetes\.io/ttl"="30" \
             --set controller.service.ports.http=80 \
             --set controller.service.ports.https=443 \
             --set controller.service.targetPorts.http=80 \
@@ -845,71 +783,6 @@ jobs:
           rm -rf processed_k8s
           
           echo "✅ Kubernetes configurations applied successfully"
-
-      - name: Create DNS Record 🌍 🦩
-        run: |
-          echo "🦩 Getting LoadBalancer information..."
-          
-          # Get the load balancer ID
-          LB_NAME="${{ env.DOMAIN_NAME }}-lb"
-          LB_ID=$(doctl compute load-balancer list --format ID,Name --no-header | grep "${LB_NAME}" | awk '{print $1}')
-          
-          if [ -z "$LB_ID" ]; then
-            echo "❌ Error: Could not find load balancer with name ${LB_NAME}"
-            echo "🦩 Available load balancers:"
-            doctl compute load-balancer list
-            exit 1
-          fi
-          
-          echo "✅ Found load balancer ID: ${LB_ID}"
-          
-          # Get the load balancer IP
-          LB_IP=$(doctl compute load-balancer get ${LB_ID} --format IP --no-header)
-          
-          if [ -z "$LB_IP" ]; then
-            echo "❌ Error: Could not get load balancer IP"
-            exit 1
-          fi
-          
-          echo "✅ Got load balancer IP: ${LB_IP}"
-          
-          echo "🦩 Checking for existing DNS records..."
-          
-          # First, clean up any stale records for our subdomain
-          echo "🦩 Cleaning up any stale DNS records..."
-          RECORDS_TO_CLEAN=$(doctl compute domain records list ${{ env.DOMAIN_SUFFIX }} --format ID,Type,Name --no-header)
-          
-          # Clean up any A or CNAME records for our subdomain
-          echo "$RECORDS_TO_CLEAN" | while read -r record; do
-            RECORD_ID=$(echo $record | awk '{print $1}')
-            RECORD_TYPE=$(echo $record | awk '{print $2}')
-            RECORD_NAME=$(echo $record | awk '{print $3}')
-            
-            # Only process records for our subdomain
-            if [ "$RECORD_NAME" = "${{ env.DOMAIN_NAME }}" ] || [ "$RECORD_NAME" = "@" ]; then
-              if [ "$RECORD_TYPE" = "A" ] || [ "$RECORD_TYPE" = "CNAME" ]; then
-                echo "🦩 Removing old record: Type=$RECORD_TYPE, Name=$RECORD_NAME, ID=$RECORD_ID"
-                doctl compute domain records delete ${{ env.DOMAIN_SUFFIX }} $RECORD_ID --force || true
-              fi
-            fi
-          done
-          
-          echo "🦩 Creating new A record for subdomain..."
-          if ! doctl compute domain records create ${{ env.DOMAIN_SUFFIX }} \
-            --record-type A \
-            --record-name "${{ env.DOMAIN_NAME }}" \
-            --record-data "${LB_IP}" \
-            --record-ttl 35; then
-            echo "❌ Error: Failed to create DNS record"
-            exit 1
-          fi
-          
-          echo "✅ DNS record created successfully"
-          
-          echo "🦩 Verifying DNS configuration..."
-          FINAL_RECORDS=$(doctl compute domain records list ${{ env.DOMAIN_SUFFIX }} --format Type,Name,Data --no-header | grep "${{ env.DOMAIN_NAME }}" || true)
-          echo "Current DNS records for ${{ env.DOMAIN_NAME }}.${{ env.DOMAIN_SUFFIX }}:"
-          echo "$FINAL_RECORDS"
 
       - name: Verify Deployment 🔍 🦩
         run: |
